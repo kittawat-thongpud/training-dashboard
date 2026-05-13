@@ -118,7 +118,7 @@
 
         async function loadData() {
             try {
-                const response = await fetch('api_jobs/by_dataset.json');
+                const response = await fetch('./api_jobs/by_dataset.json');
                 const data = await response.json();
                 
                 groupedJobs = data.groups || {};

@@ -304,7 +304,7 @@
         // ============== DATA LOADING ==============
         async function loadDatasetsInfo() {
             try {
-                const response = await fetch('api_jobs/datasets.json');
+                const response = await fetch('./api_jobs/datasets.json');
                 if (response.ok) {
                     const data = await response.json();
                     datasetsInfo = data.by_name || {};
@@ -328,9 +328,9 @@
                 // Load datasets info first
                 await loadDatasetsInfo();
                 
-                const response = await fetch(`api_jobs/jobs/${jobId}.json`);
+                const response = await fetch(`./api_jobs/jobs/${jobId}.json`);
                 if (!response.ok) {
-                    const allResponse = await fetch('api_jobs/all_jobs.json');
+                    const allResponse = await fetch('./api_jobs/all_jobs.json');
                     const data = await allResponse.json();
                     currentJob = data.jobs.find(j => j.job_id === jobId);
                 } else {

@@ -27,8 +27,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         print(f"[{self.log_date_time_string()}] {args[0]}")
     
     def translate_path(self, path):
+        # Serve api_jobs from visualization folder
+        if path.startswith('/api_jobs/'):
+            path = '/visualization' + path
         # Serve visualization/ subdirectory for root requests
-        if path == '/' or path == '/index.html':
+        elif path == '/' or path == '/index.html':
             path = '/visualization/index.html'
         elif path.startswith('/detail.html'):
             path = '/visualization' + path
