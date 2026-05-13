@@ -1,0 +1,1018 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Training Results Summary</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
+    <style>
+        body { background: #0f172a; color: #e2e8f0; }
+        .card { background: #1e293b; border-radius: 12px; padding: 20px; margin-bottom: 20px; }
+        .metric-card { 
+            background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
+            border-radius: 12px; 
+            padding: 16px; 
+            text-align: center;
+            border: 1px solid #475569;
+        }
+        .metric-value { font-size: 2rem; font-weight: bold; }
+        .metric-label { font-size: 0.875rem; color: #94a3b8; }
+        .dataset-section { margin-bottom: 40px; }
+        .job-row:hover { background: #334155; cursor: pointer; }
+        .progress-bar { 
+            background: #334155; 
+            border-radius: 4px; 
+            height: 8px; 
+            overflow: hidden;
+        }
+        .progress-fill { 
+            background: linear-gradient(90deg, #3b82f6, #8b5cf6); 
+            height: 100%; 
+            border-radius: 4px;
+        }
+        .badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+        .badge-completed { background: #10b981; color: #064e3b; }
+        .badge-running { background: #3b82f6; color: #1e3a8a; }
+        .badge-stopped { background: #f59e0b; color: #78350f; }
+        .badge-failed { background: #ef4444; color: #7f1d1d; }
+        .sort-icon { font-size: 0.75rem; opacity: 0.5; }
+        th.sorted-asc .sort-icon::after { content: ' ↑'; opacity: 1; color: #3b82f6; }
+        th.sorted-desc .sort-icon::after { content: ' ↓'; opacity: 1; color: #3b82f6; }
+        th:hover .sort-icon { opacity: 1; }
+    </style>
+</head>
+<body class="min-h-screen">
+    <div class="container mx-auto px-4 py-8">
+        <!-- Header -->
+        <div class="mb-8">
+            <h1 class="text-3xl font-bold mb-2">Training Results Summary</h1>
+            <p class="text-gray-400">Overview of all training jobs grouped by dataset</p>
+            <div class="mt-4 flex flex-wrap gap-4">
+                <button onclick="loadData()" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg font-medium">
+                    Refresh Data
+                </button>
+                <select id="datasetFilter" onchange="applyGlobalFilter()" class="px-4 py-2 bg-gray-700 rounded-lg">
+                    <option value="all">All Datasets</option>
+                </select>
+            </div>
+        </div>
+
+        <!-- Global Metrics -->
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+            <div class="metric-card">
+                <div class="metric-value text-blue-400" id="totalJobs">-</div>
+                <div class="metric-label">Total Jobs</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-value text-green-400" id="completedJobs">-</div>
+                <div class="metric-label">Completed</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-value text-yellow-400" id="runningJobs">-</div>
+                <div class="metric-label">Running</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-value text-purple-400" id="bestMap">-</div>
+                <div class="metric-label">Best mAP50-95</div>
+            </div>
+        </div>
+
+        <!-- Dataset Overview Cards -->
+        <div id="datasetOverview" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
+            <!-- Dynamic content -->
+        </div>
+
+        <!-- Dataset Sections -->
+        <div id="datasetSections">
+            <!-- Dynamic content -->
+        </div>
+    </div>
+
+    <script>
+        let allJobs = [];
+        let groupedJobs = {};
+        let filteredGroups = {}; // Store filtered state per dataset
+        let currentSort = { column: null, direction: 'asc' };
+        let currentJobs = []; // For sorting within dataset sections
+
+        // Dataset configurations
+        const DATASET_CONFIGS = {
+            'coco': { sizes: [640], color: '#3b82f6' },
+            'idd': { sizes: [640, 1280], color: '#8b5cf6' },
+            'kitti': { sizes: [320, 1024], color: '#10b981' },
+            'kitty': { sizes: [320, 1024], color: '#10b981' }
+        };
+
+        // Per-dataset state
+        const datasetFilters = {};
+        const datasetViews = {}; // Store view mode, topN, topNPerModel, and chartSort for each dataset
+        const datasetCharts = {}; // Store chart instances
+        const datasetSorted = {}; // Store sorted jobs for each dataset
+
+        async function loadData() {
+            try {
+                const response = await fetch('api_jobs/by_dataset.json');
+                const data = await response.json();
+                
+                groupedJobs = data.groups || {};
+                allJobs = Object.values(groupedJobs).flat();
+                
+                renderOverview();
+                renderDatasetSections();
+                populateDatasetFilter();
+            } catch (e) {
+                console.error('Error loading data:', e);
+                document.getElementById('datasetSections').innerHTML = `
+                    <div class="card text-center py-12">
+                        <p class="text-red-400">Error loading data. Please run the collection script first.</p>
+                        <p class="text-gray-500 mt-2">${e.message}</p>
+                    </div>
+                `;
+            }
+        }
+
+        function renderOverview() {
+            const total = allJobs.length;
+            const completed = allJobs.filter(j => j.status === 'completed').length;
+            const running = allJobs.filter(j => j.status === 'running').length;
+            const best = allJobs
+                .filter(j => j.best_mAP50_95 != null)
+                .reduce((max, j) => j.best_mAP50_95 > max ? j.best_mAP50_95 : max, 0);
+
+            document.getElementById('totalJobs').textContent = total;
+            document.getElementById('completedJobs').textContent = completed;
+            document.getElementById('runningJobs').textContent = running;
+            document.getElementById('bestMap').textContent = best ? (best * 100).toFixed(1) + '%' : '-';
+        }
+
+        // Sorting functions
+        function sortJobs(jobs, column, direction) {
+            const sorted = [...jobs];
+            const multiplier = direction === 'asc' ? 1 : -1;
+            
+            return sorted.sort((a, b) => {
+                let valA, valB;
+                
+                switch(column) {
+                    case 'machine':
+                        valA = a.machine || '';
+                        valB = b.machine || '';
+                        break;
+                    case 'model':
+                        valA = a.model_name || '';
+                        valB = b.model_name || '';
+                        break;
+                    case 'scale':
+                        valA = a.model_scale || '';
+                        valB = b.model_scale || '';
+                        break;
+                    case 'imgsz':
+                        valA = a.imgsz || 0;
+                        valB = b.imgsz || 0;
+                        break;
+                    case 'status':
+                        valA = a.status || '';
+                        valB = b.status || '';
+                        break;
+                    case 'epoch':
+                        valA = a.epoch || 0;
+                        valB = b.epoch || 0;
+                        break;
+                    case 'map5095':
+                        valA = a.best_mAP50_95 || -1;
+                        valB = b.best_mAP50_95 || -1;
+                        break;
+                    case 'map50':
+                        valA = a.best_mAP50 || -1;
+                        valB = b.best_mAP50 || -1;
+                        break;
+                    default:
+                        return 0;
+                }
+                
+                if (typeof valA === 'string') {
+                    return multiplier * valA.localeCompare(valB);
+                }
+                return multiplier * (valA - valB);
+            });
+        }
+
+        function handleSort(column, datasetName) {
+            // Toggle direction if same column
+            if (currentSort.column === column) {
+                currentSort.direction = currentSort.direction === 'asc' ? 'desc' : 'asc';
+            } else {
+                currentSort.column = column;
+                currentSort.direction = 'desc'; // Default to desc for metrics
+            }
+            
+            /**
+             * Flow: filtered jobs → sort → store → apply topN → render
+             * Preserves: toggle filters, model search
+             * Updates: sorted state, display
+             */
+            const jobs = filteredGroups[datasetName] || groupedJobs[datasetName] || [];
+            
+            // Sort and store for consistent use across views
+            const sortedJobs = sortJobs(jobs, column, currentSort.direction);
+            datasetSorted[datasetName] = sortedJobs;
+            
+            // Apply current topN filters
+            const displayJobs = applyTopNFilters(
+                sortedJobs, 
+                datasetViews[datasetName]?.topN || 0, 
+                datasetViews[datasetName]?.topNPerModel || 0
+            );
+            
+            // Update table body
+            const tbody = document.querySelector(`#section-${datasetName} tbody`);
+            if (tbody) {
+                tbody.innerHTML = displayJobs.map(job => renderJobRow(job)).join('');
+            }
+            
+            // Sync chart if active
+            if (datasetViews[datasetName]?.view === 'chart') {
+                renderJobsChart(datasetName, displayJobs);
+            }
+            
+            // Update title count
+            const titleEl = document.getElementById(`jobs-title-${datasetName}`);
+            if (titleEl) {
+                titleEl.textContent = `Jobs (${displayJobs.length})`;
+            }
+            
+            updateSortIndicators(datasetName);
+        }
+
+        function updateSortIndicators(datasetName) {
+            const headers = document.querySelectorAll(`#section-${datasetName} th`);
+            headers.forEach(th => {
+                const column = th.dataset.column;
+                th.classList.remove('sorted-asc', 'sorted-desc');
+                if (column === currentSort.column) {
+                    th.classList.add(`sorted-${currentSort.direction}`);
+                }
+            });
+        }
+
+        function renderDatasetSections() {
+            // Just call the filtered version with all data, showing "All Jobs"
+            renderDatasetSectionsWithData(groupedJobs, "All Jobs");
+        }
+
+        function renderSizeGroups(jobs, targetSizes) {
+            const bySize = {};
+            targetSizes.forEach(s => bySize[s] = []);
+            bySize['other'] = [];
+            
+            jobs.forEach(job => {
+                const size = job.imgsz;
+                if (targetSizes.includes(size)) {
+                    bySize[size].push(job);
+                } else {
+                    bySize['other'].push(job);
+                }
+            });
+            
+            let html = '<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">';
+            
+            for (const [size, sizeJobs] of Object.entries(bySize)) {
+                if (size === 'other' && sizeJobs.length === 0) continue;
+                
+                const best = sizeJobs
+                    .filter(j => j.best_mAP50_95 != null)
+                    .sort((a, b) => b.best_mAP50_95 - a.best_mAP50_95)[0];
+                const completed = sizeJobs.filter(j => j.status === 'completed').length;
+                
+                html += `
+                    <div class="p-4 rounded-lg border border-gray-600 ${size === 'other' ? 'bg-gray-800' : 'bg-gray-800'}">
+                        <div class="text-sm text-gray-400 mb-1">${size === 'other' ? 'Other Sizes' : size + 'px'}</div>
+                        <div class="text-lg font-bold">${sizeJobs.length} jobs</div>
+                        <div class="text-xs text-green-400">${completed} completed</div>
+                        ${best ? `<div class="mt-2 text-xs">Best: ${(best.best_mAP50_95 * 100).toFixed(1)}%</div>` : ''}
+                    </div>
+                `;
+            }
+            
+            html += '</div>';
+            return html;
+        }
+
+        function renderJobRow(job) {
+            const badgeClass = {
+                'completed': 'badge-completed',
+                'running': 'badge-running',
+                'stopped': 'badge-stopped',
+                'failed': 'badge-failed'
+            }[job.status] || 'badge-stopped';
+            
+            const progress = job.total_epochs ? (job.epoch / job.total_epochs * 100).toFixed(0) : 0;
+            
+            return `
+                <tr class="job-row border-b border-gray-700" onclick="viewJobDetail('${job.job_id}')">
+                    <td class="py-3">
+                        <span class="inline-block px-2 py-1 rounded text-xs font-medium bg-gray-700 text-gray-300">${job.machine || 'unknown'}</span>
+                    </td>
+                    <td class="py-3">
+                        <div class="font-medium">${job.model_name}</div>
+                        <div class="text-xs text-gray-500">${job.job_id}</div>
+                    </td>
+                    <td class="text-center py-3">${job.model_scale || '-'}</td>
+                    <td class="text-center py-3">${job.imgsz || '-'}</td>
+                    <td class="text-center py-3">
+                        <span class="badge ${badgeClass}">${job.status}</span>
+                    </td>
+                    <td class="text-center py-3">
+                        <div class="text-xs">${job.epoch || 0}/${job.total_epochs || '-'}</div>
+                        <div class="progress-bar mt-1 w-16 mx-auto">
+                            <div class="progress-fill" style="width: ${progress}%"></div>
+                        </div>
+                    </td>
+                    <td class="text-right py-3 font-medium text-purple-400">
+                        ${job.best_mAP50_95 ? (job.best_mAP50_95 * 100).toFixed(2) + '%' : '-'}
+                    </td>
+                    <td class="text-right py-3 text-blue-400">
+                        ${job.best_mAP50 ? (job.best_mAP50 * 100).toFixed(2) + '%' : '-'}
+                    </td>
+                </tr>
+            `;
+        }
+
+        function getDatasetConfig(name) {
+            const lower = name.toLowerCase();
+            for (const [key, config] of Object.entries(DATASET_CONFIGS)) {
+                if (lower.includes(key)) return config;
+            }
+            return { sizes: [], color: '#64748b' };
+        }
+
+        function formatParams(p) {
+            if (p >= 1000000) return (p / 1000000).toFixed(2) + 'M';
+            if (p >= 1000) return (p / 1000).toFixed(1) + 'K';
+            return p.toString();
+        }
+
+        function viewJobDetail(jobId) {
+            window.location.href = `detail.html?job=${jobId}`;
+        }
+
+        function populateDatasetFilter() {
+            const select = document.getElementById('datasetFilter');
+            select.innerHTML = '<option value="all">All Datasets</option>';
+            
+            for (const name of Object.keys(groupedJobs)) {
+                select.innerHTML += `<option value="${name}">${name}</option>`;
+            }
+        }
+
+        function applyGlobalFilter() {
+            const datasetFilter = document.getElementById('datasetFilter').value;
+            
+            // Filter by dataset only
+            let visibleGroups = {};
+            for (const [dsName, jobs] of Object.entries(groupedJobs)) {
+                if (datasetFilter !== 'all' && dsName !== datasetFilter) continue;
+                visibleGroups[dsName] = jobs;
+            }
+            
+            // Re-render with dataset filter only
+            renderDatasetSectionsWithData(visibleGroups);
+            
+            // Update global metrics
+            const allFiltered = Object.values(visibleGroups).flat();
+            updateMetrics(allFiltered);
+        }
+
+        // Toggle filter for a dataset
+        function toggleFilter(datasetName, type, value) {
+            if (!datasetFilters[datasetName]) {
+                datasetFilters[datasetName] = { status: new Set(), scale: new Set(), machine: new Set(), model: new Set(), imgsz: new Set(), modelSearch: '' };
+            }
+            
+            // Store imgsz as string for consistency
+            const storeValue = type === 'imgsz' ? String(value) : value;
+            
+            const filterSet = datasetFilters[datasetName][type];
+            if (filterSet.has(storeValue)) {
+                filterSet.delete(storeValue);
+            } else {
+                filterSet.add(storeValue);
+            }
+            
+            applyDatasetFilters(datasetName);
+        }
+
+        // Update model search filter
+        function updateModelSearch(datasetName, value) {
+            if (!datasetFilters[datasetName]) {
+                datasetFilters[datasetName] = { status: new Set(), scale: new Set(), machine: new Set(), model: new Set(), imgsz: new Set(), modelSearch: '' };
+            }
+            datasetFilters[datasetName].modelSearch = value.toLowerCase();
+            applyDatasetFilters(datasetName);
+        }
+
+        /**
+         * Apply per-dataset filters (toggle filters + model search)
+         * Flow: apply filters → update filteredGroups → clear sorted state → render
+         * Resets: sorted state (new filter = new sort)
+         * Preserves: topN settings, view mode
+         */
+        function applyDatasetFilters(datasetName) {
+            const filters = datasetFilters[datasetName] || { status: new Set(), scale: new Set(), machine: new Set(), model: new Set(), imgsz: new Set(), modelSearch: '' };
+            const allJobs = groupedJobs[datasetName] || [];
+            
+            // Apply all filter types
+            const filtered = allJobs.filter(job => {
+                if (filters.status.size > 0 && !filters.status.has(job.status)) return false;
+                if (filters.scale.size > 0 && !filters.scale.has(job.model_scale)) return false;
+                if (filters.machine.size > 0 && !filters.machine.has(job.machine)) return false;
+                if (filters.model.size > 0 && !filters.model.has(job.model_name)) return false;
+                if (filters.imgsz.size > 0 && !filters.imgsz.has(String(job.imgsz))) return false;
+                if (filters.modelSearch && filters.modelSearch.trim()) {
+                    const modelName = (job.model_name || '').toLowerCase();
+                    if (!modelName.includes(filters.modelSearch.trim())) return false;
+                }
+                return true;
+            });
+            
+            // Update state
+            filteredGroups[datasetName] = filtered;
+            delete datasetSorted[datasetName]; // Reset sort on filter change
+            
+            // Render with current view settings
+            renderDatasetTable(datasetName, filtered);
+            if (datasetViews[datasetName]?.view === 'chart') {
+                renderJobsChart(datasetName);
+            }
+            
+            // Update title
+            const displayJobs = applyTopNFilters(
+                filtered,
+                datasetViews[datasetName]?.topN || 0,
+                datasetViews[datasetName]?.topNPerModel || 0
+            );
+            const titleEl = document.getElementById(`jobs-title-${datasetName}`);
+            if (titleEl) titleEl.textContent = `Jobs (${displayJobs.length})`;
+            
+            updateGlobalMetrics();
+        }
+
+        // Clear all filters for a dataset
+        function clearDatasetFilters(datasetName) {
+            datasetFilters[datasetName] = { status: new Set(), scale: new Set(), machine: new Set(), model: new Set(), imgsz: new Set(), modelSearch: '' };
+            delete datasetSorted[datasetName]; // Clear sorted state too
+            
+            // Reset topN inputs
+            if (datasetViews[datasetName]) {
+                datasetViews[datasetName].topN = 0;
+                datasetViews[datasetName].topNPerModel = 0;
+                datasetViews[datasetName].chartSort = 'mAP50-95';
+                const topNInput = document.getElementById(`topn-${datasetName}`);
+                const topNPerModelInput = document.getElementById(`topn-model-${datasetName}`);
+                const chartSortInput = document.getElementById(`chart-sort-${datasetName}`);
+                if (topNInput) topNInput.value = 0;
+                if (topNPerModelInput) topNPerModelInput.value = 0;
+                if (chartSortInput) chartSortInput.value = 'mAP50-95';
+            }
+            
+            // Clear model search input
+            const modelSearchInput = document.getElementById(`model-search-${datasetName}`);
+            if (modelSearchInput) modelSearchInput.value = '';
+            
+            applyDatasetFilters(datasetName);
+        }
+
+        function updateGlobalMetrics() {
+            const allFiltered = Object.values(filteredGroups).flat();
+            updateMetrics(allFiltered.length > 0 ? allFiltered : allJobs);
+        }
+
+        function updateMetrics(jobs) {
+            const total = jobs.length;
+            const completed = jobs.filter(j => j.status === 'completed').length;
+            const running = jobs.filter(j => j.status === 'running').length;
+            const best = jobs
+                .filter(j => j.best_mAP50_95 != null)
+                .reduce((max, j) => j.best_mAP50_95 > max ? j.best_mAP50_95 : max, 0);
+
+            document.getElementById('totalJobs').textContent = total;
+            document.getElementById('completedJobs').textContent = completed;
+            document.getElementById('runningJobs').textContent = running;
+            document.getElementById('bestMap').textContent = best ? (best * 100).toFixed(1) + '%' : '-';
+        }
+
+        function renderDatasetSectionsWithData(groups, title) {
+            const container = document.getElementById('datasetSections');
+            container.innerHTML = '';
+            filteredGroups = {}; // Reset filtered groups
+
+            for (const [datasetName, jobs] of Object.entries(groups)) {
+                if (jobs.length === 0) continue;
+                
+                // Initialize filtered groups with all jobs
+                filteredGroups[datasetName] = [...jobs];
+                
+                const config = getDatasetConfig(datasetName);
+                const bestJob = jobs
+                    .filter(j => j.best_mAP50_95 != null)
+                    .sort((a, b) => b.best_mAP50_95 - a.best_mAP50_95)[0];
+                
+                // Get unique values for filters
+                const machines = [...new Set(jobs.map(j => j.machine).filter(Boolean))].sort();
+                const models = [...new Set(jobs.map(j => j.model_name).filter(Boolean))].sort();
+                const statuses = [...new Set(jobs.map(j => j.status).filter(Boolean))].sort();
+                const scales = [...new Set(jobs.map(j => j.model_scale).filter(Boolean))].sort();
+                const sizes = [...new Set(jobs.map(j => j.imgsz).filter(Boolean))].sort((a, b) => a - b);
+                
+                const section = document.createElement('div');
+                section.className = 'dataset-section';
+                section.id = `section-${datasetName}`;
+                
+                // Initialize filter state
+                if (!datasetFilters[datasetName]) {
+                    datasetFilters[datasetName] = { status: new Set(), scale: new Set(), machine: new Set(), model: new Set(), imgsz: new Set(), modelSearch: '' };
+                }
+                const filters = datasetFilters[datasetName];
+                
+                section.innerHTML = `
+                    <div class="card">
+                        <div class="flex justify-between items-center mb-4">
+                            <div>
+                                <h2 class="text-2xl font-bold" style="color: ${config.color}">${datasetName.toUpperCase()}</h2>
+                                <p class="text-gray-400" id="count-${datasetName}">${jobs.length} jobs • Target sizes: ${config.sizes.join(', ')}</p>
+                            </div>
+                            ${bestJob ? `
+                            <div class="text-right">
+                                <div class="text-sm text-gray-400">Best mAP50-95</div>
+                                <div class="text-2xl font-bold" style="color: ${config.color}">${(bestJob.best_mAP50_95 * 100).toFixed(2)}%</div>
+                                <div class="text-xs text-gray-500">${bestJob.model_name}</div>
+                            </div>
+                            ` : ''}
+                        </div>
+                        
+                        <!-- Filter Toggles -->
+                        <div class="mb-4 p-3 bg-gray-800/50 rounded-lg">
+                            <div class="flex flex-wrap items-center gap-3">
+                                ${machines.length > 1 ? `
+                                <div class="flex items-center gap-1">
+                                    <span class="text-xs text-gray-500 mr-1">Machine:</span>
+                                    ${machines.map(m => `
+                                        <button onclick="toggleFilter('${datasetName}', 'machine', '${m}')" 
+                                                id="btn-${datasetName}-machine-${m}"
+                                                class="px-2 py-1 text-xs rounded border transition-all ${filters.machine.has(m) ? 'bg-blue-600 border-blue-600 text-white' : 'bg-gray-700 border-gray-600 text-gray-300 hover:bg-gray-600'}">${m}</button>
+                                    `).join('')}
+                                </div>
+                                ` : ''}
+                                
+                                ${scales.length > 1 ? `
+                                <div class="flex items-center gap-1">
+                                    <span class="text-xs text-gray-500 mr-1">Scale:</span>
+                                    ${scales.map(s => `
+                                        <button onclick="toggleFilter('${datasetName}', 'scale', '${s}')" 
+                                                id="btn-${datasetName}-scale-${s}"
+                                                class="px-2 py-1 text-xs rounded border transition-all ${filters.scale.has(s) ? 'bg-purple-600 border-purple-600 text-white' : 'bg-gray-700 border-gray-600 text-gray-300 hover:bg-gray-600'}">${s}</button>
+                                    `).join('')}
+                                </div>
+                                ` : ''}
+                                
+                                ${statuses.length > 1 ? `
+                                <div class="flex items-center gap-1">
+                                    <span class="text-xs text-gray-500 mr-1">Status:</span>
+                                    ${statuses.map(s => `
+                                        <button onclick="toggleFilter('${datasetName}', 'status', '${s}')" 
+                                                id="btn-${datasetName}-status-${s}"
+                                                class="px-2 py-1 text-xs rounded border transition-all ${filters.status.has(s) ? 'bg-green-600 border-green-600 text-white' : 'bg-gray-700 border-gray-600 text-gray-300 hover:bg-gray-600'}">${s}</button>
+                                    `).join('')}
+                                </div>
+                                ` : ''}
+                                
+                                ${sizes.length > 1 ? `
+                                <div class="flex items-center gap-1">
+                                    <span class="text-xs text-gray-500 mr-1">Size:</span>
+                                    ${sizes.map(s => `
+                                        <button onclick="toggleFilter('${datasetName}', 'imgsz', '${s}')" 
+                                                id="btn-${datasetName}-imgsz-${s}"
+                                                class="px-2 py-1 text-xs rounded border transition-all ${filters.imgsz.has(String(s)) ? 'bg-orange-600 border-orange-600 text-white' : 'bg-gray-700 border-gray-600 text-gray-300 hover:bg-gray-600'}">${s}</button>
+                                    `).join('')}
+                                </div>
+                                ` : ''}
+                                
+                                <!-- Model Name Search -->
+                                <div class="flex items-center gap-1">
+                                    <span class="text-xs text-gray-500 mr-1">Model:</span>
+                                    <input type="text" id="model-search-${datasetName}" 
+                                           value="${filters.modelSearch || ''}"
+                                           oninput="updateModelSearch('${datasetName}', this.value)"
+                                           placeholder="Search model..."
+                                           class="px-2 py-1 text-xs bg-gray-700 border border-gray-600 rounded text-gray-300 w-28 focus:outline-none focus:border-pink-500">
+                                </div>
+                                
+                                <button onclick="clearDatasetFilters('${datasetName}')" class="ml-auto px-3 py-1 text-xs bg-gray-700 hover:bg-gray-600 rounded text-gray-300">
+                                    Clear
+                                </button>
+                            </div>
+                        </div>
+                        
+                        ${renderSizeGroups(jobs, config.sizes)}
+                        
+                        <div class="mt-6">
+                            <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
+                                <h3 class="text-lg font-semibold" id="jobs-title-${datasetName}">${title || 'Jobs'} (${jobs.length})</h3>
+                                <div class="flex items-center gap-2">
+                                    <!-- View Toggle -->
+                                    <div class="flex bg-gray-800 rounded-lg p-1">
+                                        <button onclick="setJobsView('${datasetName}', 'table')" id="btn-table-${datasetName}" class="tab-btn active px-3 py-1 rounded-md text-sm font-medium transition">
+                                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M3 14h18m-9-4v8m-7 0h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+                                        </button>
+                                        <button onclick="setJobsView('${datasetName}', 'chart')" id="btn-chart-${datasetName}" class="tab-btn px-3 py-1 rounded-md text-sm font-medium transition">
+                                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+                                        </button>
+                                    </div>
+                                    <!-- Top N Overall -->
+                                    <div class="flex items-center gap-2 bg-gray-800 rounded-lg px-3 py-1">
+                                        <span class="text-xs text-gray-400">Top</span>
+                                        <input type="number" id="topn-${datasetName}" value="0" min="0" 
+                                               onchange="updateJobsView('${datasetName}')"
+                                               class="w-12 bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-center">
+                                        <span class="text-xs text-gray-400">(0=all)</span>
+                                    </div>
+                                    <!-- Top N per Model -->
+                                    <div class="flex items-center gap-2 bg-gray-800 rounded-lg px-3 py-1" title="Top N jobs per model">
+                                        <span class="text-xs text-gray-400">Per Model</span>
+                                        <input type="number" id="topn-model-${datasetName}" value="0" min="0" 
+                                               onchange="updateJobsView('${datasetName}')"
+                                               class="w-12 bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-center">
+                                        <span class="text-xs text-gray-400">(0=all)</span>
+                                    </div>
+                                    <!-- Chart Sort Metric -->
+                                    <div class="flex items-center gap-2 bg-gray-800 rounded-lg px-3 py-1" title="Chart sort metric">
+                                        <span class="text-xs text-gray-400">Sort</span>
+                                        <select id="chart-sort-${datasetName}" onchange="updateJobsView('${datasetName}')"
+                                                class="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-xs text-gray-300">
+                                            <option value="mAP50-95">mAP50-95</option>
+                                            <option value="mAP50">mAP50</option>
+                                        </select>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- Table View -->
+                            <div id="view-table-${datasetName}" class="overflow-x-auto">
+                                <table class="w-full text-sm">
+                                    <thead class="text-gray-400 border-b border-gray-600">
+                                        <tr>
+                                            <th class="text-left py-2 cursor-pointer hover:text-white select-none" data-column="machine" onclick="handleSort('machine', '${datasetName}')">Machine <span class="sort-icon">↕</span></th>
+                                            <th class="text-left py-2 cursor-pointer hover:text-white select-none" data-column="model" onclick="handleSort('model', '${datasetName}')">Model <span class="sort-icon">↕</span></th>
+                                            <th class="text-center py-2 cursor-pointer hover:text-white select-none" data-column="scale" onclick="handleSort('scale', '${datasetName}')">Scale <span class="sort-icon">↕</span></th>
+                                            <th class="text-center py-2 cursor-pointer hover:text-white select-none" data-column="imgsz" onclick="handleSort('imgsz', '${datasetName}')">Size <span class="sort-icon">↕</span></th>
+                                            <th class="text-center py-2 cursor-pointer hover:text-white select-none" data-column="status" onclick="handleSort('status', '${datasetName}')">Status <span class="sort-icon">↕</span></th>
+                                            <th class="text-center py-2 cursor-pointer hover:text-white select-none" data-column="epoch" onclick="handleSort('epoch', '${datasetName}')">Epoch <span class="sort-icon">↕</span></th>
+                                            <th class="text-right py-2 cursor-pointer hover:text-white select-none" data-column="map5095" onclick="handleSort('map5095', '${datasetName}')">mAP50-95 <span class="sort-icon">↕</span></th>
+                                            <th class="text-right py-2 cursor-pointer hover:text-white select-none" data-column="map50" onclick="handleSort('map50', '${datasetName}')">mAP50 <span class="sort-icon">↕</span></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="tbody-${datasetName}">
+                                        ${jobs.map(job => renderJobRow(job)).join('')}
+                                    </tbody>
+                                </table>
+                            </div>
+                            
+                            <!-- Chart View -->
+                            <div id="view-chart-${datasetName}" class="hidden" style="height: 400px;">
+                                <canvas id="chart-${datasetName}"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                
+                container.appendChild(section);
+            }
+        }
+
+        /**
+         * Set view mode for dataset (table or chart)
+         * Flow: view switch → update UI → render with current filters preserved
+         */
+        function setJobsView(datasetName, view) {
+            // Initialize view state if needed
+            if (!datasetViews[datasetName]) {
+                datasetViews[datasetName] = { view: 'table', topN: 0, topNPerModel: 0, chartSort: 'mAP50-95' };
+            }
+            
+            // Update view state
+            datasetViews[datasetName].view = view;
+            
+            // Update UI button states
+            document.getElementById(`btn-table-${datasetName}`)?.classList.toggle('active', view === 'table');
+            document.getElementById(`btn-chart-${datasetName}`)?.classList.toggle('active', view === 'chart');
+            
+            // Toggle view visibility
+            document.getElementById(`view-table-${datasetName}`)?.classList.toggle('hidden', view !== 'table');
+            document.getElementById(`view-chart-${datasetName}`)?.classList.toggle('hidden', view !== 'chart');
+            
+            // Render chart if switching to chart view
+            // Preserves: filters, sort, topN, topNPerModel, chartSort
+            if (view === 'chart') {
+                const displayJobs = getDisplayJobsForView(datasetName);
+                renderJobsChart(datasetName, displayJobs);
+            }
+        }
+
+        /**
+         * Get jobs for display considering all current states
+         * Priority: sorted → filtered → all
+         * Then applies: topN per model → overall topN
+         */
+        function getDisplayJobsForView(datasetName) {
+            const views = datasetViews[datasetName] || { topN: 0, topNPerModel: 0 };
+            
+            // Get base jobs (preserve sort order if exists, else filtered, else all)
+            const baseJobs = datasetSorted[datasetName] 
+                || filteredGroups[datasetName] 
+                || groupedJobs[datasetName] 
+                || [];
+            
+            // Apply topN filters
+            return applyTopNFilters(baseJobs, views.topN, views.topNPerModel);
+        }
+
+        /**
+         * Update jobs view when topN, topNPerModel, or chartSort changes
+         * Flow: read inputs → update state → re-render current view
+         */
+        function updateJobsView(datasetName) {
+            if (!datasetViews[datasetName]) {
+                datasetViews[datasetName] = { view: 'table', topN: 0, topNPerModel: 0, chartSort: 'mAP50-95' };
+            }
+            
+            // Read input values
+            const topNInput = document.getElementById(`topn-${datasetName}`);
+            const topNPerModelInput = document.getElementById(`topn-model-${datasetName}`);
+            const chartSortInput = document.getElementById(`chart-sort-${datasetName}`);
+            
+            // Update state
+            datasetViews[datasetName].topN = parseInt(topNInput?.value || 0);
+            datasetViews[datasetName].topNPerModel = parseInt(topNPerModelInput?.value || 0);
+            datasetViews[datasetName].chartSort = chartSortInput?.value || 'mAP50-95';
+            
+            const view = datasetViews[datasetName].view;
+            const displayJobs = getDisplayJobsForView(datasetName);
+            
+            // Re-render current view
+            if (view === 'table') {
+                const tbody = document.getElementById(`tbody-${datasetName}`);
+                if (tbody) {
+                    tbody.innerHTML = displayJobs.map(job => renderJobRow(job)).join('');
+                }
+            } else {
+                renderJobsChart(datasetName, displayJobs);
+            }
+            
+            // Update title count
+            const titleEl = document.getElementById(`jobs-title-${datasetName}`);
+            if (titleEl) {
+                titleEl.textContent = `Jobs (${displayJobs.length})`;
+            }
+        }
+
+        // Extract base model name (ignore bracket notation like [7680,1920,480])
+        function getBaseModelName(modelName) {
+            if (!modelName) return 'unknown';
+            // Remove bracket and its contents, also trim trailing spaces
+            return modelName.replace(/\s*\[.*\]\s*$/, '').trim() || modelName;
+        }
+
+        // Apply both topN overall and topN per model filters
+        function applyTopNFilters(jobs, topN, topNPerModel) {
+            let result = [...jobs];
+            
+            // First apply per-model filter (keep top N per model)
+            if (topNPerModel > 0) {
+                const byModel = {};
+                result.forEach(job => {
+                    // Group by base model name (ignore [size] brackets)
+                    const model = getBaseModelName(job.model_name);
+                    if (!byModel[model]) byModel[model] = [];
+                    byModel[model].push(job);
+                });
+                
+                result = [];
+                for (const [model, modelJobs] of Object.entries(byModel)) {
+                    const sorted = [...modelJobs].sort((a, b) => (b.best_mAP50_95 || 0) - (a.best_mAP50_95 || 0));
+                    result.push(...sorted.slice(0, topNPerModel));
+                }
+            }
+            
+            // Then apply overall topN
+            if (topN > 0) {
+                result = result.slice(0, topN);
+            }
+            
+            return result;
+        }
+
+        // Get top N jobs sorted by mAP50-95
+        function getTopNJobs(jobs, topN) {
+            if (topN <= 0) return jobs;
+            const sorted = [...jobs].sort((a, b) => (b.best_mAP50_95 || 0) - (a.best_mAP50_95 || 0));
+            return sorted.slice(0, topN);
+        }
+
+        // Render bar chart for jobs
+        function renderJobsChart(datasetName, filteredSortedJobs = null) {
+            // Use filtered+sorted jobs if provided, otherwise compute
+            let jobs;
+            if (filteredSortedJobs) {
+                jobs = filteredSortedJobs;
+            } else {
+                const baseJobs = datasetSorted[datasetName] 
+                    || filteredGroups[datasetName] 
+                    || groupedJobs[datasetName] 
+                    || [];
+                const topN = datasetViews[datasetName]?.topN || 0;
+                const topNPerModel = datasetViews[datasetName]?.topNPerModel || 0;
+                jobs = applyTopNFilters(baseJobs, topN, topNPerModel);
+            }
+            
+            // Sort by selected metric for chart (highest first, left to right)
+            const chartSort = datasetViews[datasetName]?.chartSort || 'mAP50-95';
+            jobs = [...jobs].sort((a, b) => {
+                if (chartSort === 'mAP50') {
+                    return (b.best_mAP50 || 0) - (a.best_mAP50 || 0);
+                }
+                return (b.best_mAP50_95 || 0) - (a.best_mAP50_95 || 0);
+            });
+            
+            const ctx = document.getElementById(`chart-${datasetName}`)?.getContext('2d');
+            if (!ctx) return;
+            
+            // Destroy existing chart
+            if (datasetCharts[datasetName]) {
+                datasetCharts[datasetName].destroy();
+            }
+            
+            // Prepare data - dual metrics (mAP50 and mAP50-95)
+            const labels = jobs.map(j => `${getBaseModelName(j.model_name)} (${j.model_scale || '-'})`);
+            const data5095 = jobs.map(j => j.best_mAP50_95 || 0);
+            const data50 = jobs.map(j => j.best_mAP50 || 0);
+            
+            // Calculate adaptive y-axis max for better visibility
+            const allValues = [...data5095, ...data50].filter(v => v > 0);
+            const maxValue = allValues.length > 0 ? Math.max(...allValues) : 1;
+            // Add 10% padding and round up to nice number
+            const yAxisMax = Math.min(1, Math.ceil(maxValue * 1.1 * 20) / 20); // Round to nearest 0.05, max 1.0
+            
+            datasetCharts[datasetName] = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        {
+                            label: 'mAP50-95',
+                            data: data5095,
+                            backgroundColor: '#8b5cf6', // Purple
+                            borderColor: '#7c3aed',
+                            borderWidth: 1,
+                            borderRadius: 4,
+                            barPercentage: 0.8,
+                            categoryPercentage: 0.9
+                        },
+                        {
+                            label: 'mAP50',
+                            data: data50,
+                            backgroundColor: '#3b82f6', // Blue
+                            borderColor: '#2563eb',
+                            borderWidth: 1,
+                            borderRadius: 4,
+                            barPercentage: 0.8,
+                            categoryPercentage: 0.9
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: true,
+                            labels: {
+                                color: '#e2e8f0',
+                                usePointStyle: true,
+                                pointStyle: 'rectRounded'
+                            }
+                        },
+                        tooltip: {
+                            backgroundColor: '#1e293b',
+                            titleColor: '#e2e8f0',
+                            bodyColor: '#cbd5e1',
+                            borderColor: '#475569',
+                            borderWidth: 1,
+                            callbacks: {
+                                label: (ctx) => `${ctx.dataset.label}: ${(ctx.raw * 100).toFixed(2)}%`,
+                                afterBody: (ctx) => {
+                                    const job = jobs[ctx[0].dataIndex];
+                                    return `\nMachine: ${job.machine || 'unknown'}\nStatus: ${job.status}\nEpoch: ${job.epoch || 0}/${job.total_epochs || '-'}`;
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            ticks: { 
+                                color: '#94a3b8',
+                                maxRotation: 45,
+                                minRotation: 45,
+                                font: { size: 10 }
+                            },
+                            grid: { display: false }
+                        },
+                        y: {
+                            grid: { color: '#334155' },
+                            ticks: { 
+                                color: '#94a3b8',
+                                callback: v => (v * 100).toFixed(0) + '%'
+                            },
+                            beginAtZero: true,
+                            max: yAxisMax || 0.1 // Adaptive max, minimum 0.1 for visibility
+                        }
+                    },
+                    onClick: (e, elements) => {
+                        if (elements.length > 0) {
+                            const index = elements[0].index;
+                            const job = jobs[index];
+                            if (job?.job_id) {
+                                viewJobDetail(job.job_id);
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        /**
+         * Render table for a specific dataset after filtering
+         * Flow: get base jobs (sorted > filtered) → apply topN → render rows
+         * Also updates filter button styles
+         */
+        function renderDatasetTable(datasetName, jobs) {
+            const tbody = document.getElementById(`tbody-${datasetName}`);
+            const countEl = document.getElementById(`count-${datasetName}`);
+            
+            if (tbody) {
+                // Use sorted data if available, else use filtered data passed in
+                const baseJobs = datasetSorted[datasetName] || jobs;
+                const displayJobs = applyTopNFilters(
+                    baseJobs,
+                    datasetViews[datasetName]?.topN || 0,
+                    datasetViews[datasetName]?.topNPerModel || 0
+                );
+                
+                tbody.innerHTML = displayJobs.map(job => renderJobRow(job)).join('');
+            }
+            
+            // Update button styles
+            const filters = datasetFilters[datasetName];
+            ['machine', 'scale', 'status', 'imgsz'].forEach(type => {
+                // Active buttons (green/orange/blue/purple)
+                filters[type].forEach(value => {
+                    const btn = document.getElementById(`btn-${datasetName}-${type}-${value}`);
+                    if (btn) {
+                        const colorClass = type === 'machine' ? 'bg-blue-600 border-blue-600' : 
+                                          type === 'scale' ? 'bg-purple-600 border-purple-600' : 
+                                          type === 'imgsz' ? 'bg-orange-600 border-orange-600' : 'bg-green-600 border-green-600';
+                        btn.className = `px-2 py-1 text-xs rounded border transition-all ${colorClass} text-white`;
+                    }
+                });
+                
+                // Get all unique values for this type from original jobs
+                const allJobs = groupedJobs[datasetName] || [];
+                let allValues;
+                if (type === 'machine') allValues = [...new Set(allJobs.map(j => j.machine).filter(Boolean))];
+                else if (type === 'scale') allValues = [...new Set(allJobs.map(j => j.model_scale).filter(Boolean))];
+                else if (type === 'imgsz') allValues = [...new Set(allJobs.map(j => j.imgsz).filter(Boolean))].map(String);
+                else allValues = [...new Set(allJobs.map(j => j.status).filter(Boolean))];
+                
+                // Inactive buttons (gray)
+                allValues.forEach(value => {
+                    if (!filters[type].has(value)) {
+                        const btn = document.getElementById(`btn-${datasetName}-${type}-${value}`);
+                        if (btn) {
+                            btn.className = 'px-2 py-1 text-xs rounded border transition-all bg-gray-700 border-gray-600 text-gray-300 hover:bg-gray-600';
+                        }
+                    }
+                });
+            });
+        }
+
+        // Load on startup
+        loadData();
+    </script>
+</body>
+</html>

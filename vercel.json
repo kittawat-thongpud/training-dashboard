@@ -1,0 +1,35 @@
+{
+  "version": 2,
+  "name": "training-results-dashboard",
+  "builds": [
+    {
+      "src": "index.html",
+      "use": "@vercel/static"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/detail",
+      "dest": "/detail.html"
+    },
+    {
+      "src": "/api_jobs/(.*)",
+      "dest": "/api_jobs/$1"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/api_jobs/(.*)",
+      "headers": [
+        {
+          "key": "Access-Control-Allow-Origin",
+          "value": "*"
+        },
+        {
+          "key": "Content-Type",
+          "value": "application/json"
+        }
+      ]
+    }
+  ]
+}
