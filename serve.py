@@ -2,7 +2,7 @@
 """
 Simple HTTP server for visualization
 Usage: python serve.py [port]
-Serves from parent directory (Result/) so /result/api_jobs/ paths work
+Serves from current directory (visualization/)
 """
 
 import http.server
@@ -12,9 +12,9 @@ import sys
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
 
-# Change to parent directory (Result/) so paths match
-parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-os.chdir(parent_dir)
+# Stay in current directory (visualization/)
+current_dir = os.path.dirname(os.path.abspath(__file__))
+os.chdir(current_dir)
 
 class Handler(http.server.SimpleHTTPRequestHandler):
     def end_headers(self):
@@ -27,20 +27,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         print(f"[{self.log_date_time_string()}] {args[0]}")
     
     def translate_path(self, path):
-        # Serve api_jobs from visualization folder
-        if path.startswith('/api_jobs/'):
-            path = '/visualization' + path
-        # Serve visualization/ subdirectory for root requests
-        elif path == '/' or path == '/index.html':
-            path = '/visualization/index.html'
-        elif path.startswith('/detail.html'):
-            path = '/visualization' + path
+        # Default: serve from current directory
+        if path == '/':
+            path = '/index.html'
         return super().translate_path(path)
 
 with socketserver.TCPServer(("", PORT), Handler) as httpd:
     print(f"="*50)
     print(f"Server running at http://localhost:{PORT}/")
-    print(f"Root: {parent_dir}")
+    print(f"Root: {current_dir}")
     print(f"Press Ctrl+C to stop")
     print(f"="*50)
     try:
